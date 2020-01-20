@@ -28,11 +28,16 @@ def InitIO(handle):
     }
     return readers.get(type(handle), lambda n: None)(handle)
 
+class InOutException(Exception):
+    pass
+
 class INOUT:            #父類別
     def __init__(self, handle):
         self.handle = handle
+        self.exceptTag = b'\\'
     
-    def data_to_nbyte(self, N):     # 將資料加上基本標籤
+    def data_to_nbyte(self, N, exceptFlag=False):     # 將資料加上基本標籤
+        exceptTag = self.exceptTag if exceptFlag else b''
         if isinstance(N, int):
             # N < 2^8(256) bytes
             if N < (1 << 8):       tag = 'B'
@@ -41,22 +46,31 @@ class INOUT:            #父類別
             # N < 2^32(4G) bytes
             elif N < (1 << 32):    tag = 'L'
             # N < 2^64 bytes
-            else:                  tag = 'Q'        
-            return tag.encode('utf-8') + struct.pack('!'+tag, N)
+            else:                  tag = 'Q'
+            nbyte = tag.encode('utf-8') + struct.pack('!'+tag, N)
         elif isinstance(N, bytes):
             tag, b = 's', N
-            return tag.encode('utf-8') + self.data_to_nbyte(len(b)) + b
+            nbyte = tag.encode('utf-8') + self.data_to_nbyte(len(b)) + b
         elif isinstance(N, str):
             tag, b = 'c', N.encode('utf-8')
             N = N.encode('utf-8')
-            return tag.encode('utf-8') + self.data_to_nbyte(len(b)) + b
-        raise TypeError('Invail Type: ' + type(tag))
+            nbyte = tag.encode('utf-8') + self.data_to_nbyte(len(b)) + b
+        else:
+            raise TypeError('Invaild Type: ' + type(tag))
+        return exceptTag + nbyte
     
     def nbyte_to_data(self):        # 將資料解開基本標籤
         # Define the tags that mapping to size
         size_info = {'B':1, 'H':2, 'L':4, 'Q':8}
         btag = self.read_raw(1)
-        if not btag:    return None
+        if not btag:
+            return None
+        exceptFlag = False
+        if btag == self.exceptTag:   # 如果是特殊標籤
+            exceptFlag = True        # 設 flag 為 True
+            btag = self.read_raw(1)  # 再讀一次為正常的基本標籤
+        if not btag:                 # 沒讀到東西就是斷線了
+            return None
         # Btag to String
         tag = btag.decode('utf-8')
         
@@ -73,7 +87,12 @@ class INOUT:            #父類別
             result  = bstr if tag == 's' else bstr.decode('utf-8')
         else:
             raise TypeError('Invaild type: ' + tag)
+        if exceptFlag:
+            # 是特別標籤時不用 return ， 而是用　raise exception
+            # 有無特別標籤的差別僅是在於傳回資料的方法而已
+            raise InOutException(result)
         return result
+    
     def read(self): # 提供高級的存取介面
         return self.nbyte_to_data()
     def write(self, d): # 提供高級的存取介面
@@ -252,9 +271,9 @@ class NetAPI:
                 fp.write(block)                             # 寫進暫存檔
         return fileTmpName
 
-    def recv_tag(self):               return self.iHandle.read_raw(FILE_TAG_SIZE)
+    def recv_tag(self):               return self.iHandle.read()
     def recv_data(self):              return self.iHandle.read()
-    def send_tag(self, tag):          return self.oHandle.write_raw(tag)
+    def send_tag(self, tag):          return self.oHandle.write(tag)
     def send_data(self, data):        return self.oHandle.write(data)
 
     def send_size(self, n):           return self.send_data(n)
