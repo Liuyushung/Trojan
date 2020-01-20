@@ -7,7 +7,7 @@ Created on Sat Jan 11 14:39:40 2020
 
 #server.py
 import socket
-from my_protocol import *
+from netapi import NetAPI
 
 clientSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 clientSocket.connect(('127.0.0.1', 10732))

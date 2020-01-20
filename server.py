@@ -6,8 +6,9 @@ Created on Sat Jan 11 14:33:24 2020
 """
 
 #server.py
+import os
 import socket
-from my_protocol import *
+from netapi import NetAPI, save_file
 
 serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 serverSocket.bind(('127.0.0.1', 10732))
