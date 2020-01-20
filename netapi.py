@@ -55,6 +55,7 @@ class NetAPI:
         result = {}
         
         while True:
+            # 開始先收標籤
             tag = None
             #loggin.debug('wait for tag')
             try:
@@ -87,13 +88,14 @@ class NetAPI:
                 continue
             #self.send_success()  <-- ??
             
+            # 這裡收資料
             try:
                 #logging.debug('Wait for receive data')
                 data = receiver.get(tag, (lambda:None))()     # 取得檔案資料
                 if data is None:    break   # 沒資料就停止
                 result[tag] = data      # 資料放進回傳值
                 #logging.debug('Send success after receive data')
-                #self.send_success()
+                self.send_success()
                 continue
             except InOutException as e:
                 tag = e.args[0]         # 取得檔案標籤
@@ -136,23 +138,49 @@ class NetAPI:
         fileName = '\t'.join(split_path(path))
         fileSize = os.path.getsize(path)
         fileData = open(path, 'rb').read()
-        try:
-            self.send_tag(FILE_NAME_TAG)
-            self.send_data(fileName)
-            self.send_tag(FILE_SIZE_TAG)
-            self.send_data(fileSize)
-            if fileSize > self.blockSize:   # 比區塊大，用區塊傳
-                self.send_tag(FILE_BLOCK_TAG)
-                self.send_blocks(path)
-            else:                           # 比區塊小，直接傳內容
-                self.send_tag(FILE_COONTENT_TAG)
-                self.send_conntent(fileData)
-            self.send_tag(FILE_END_TAG)
-            return True
-        except Exception as e:
-            print(str(e))
-            self.send_tag(FILE_ABORT_TAG)
-            return False
+        
+        # 先決定檔案內容用甚麼方式傳送
+        if fileSize > self.blockSize:   # 比區塊大，用區塊傳
+            fileTag, fileSend = (FILE_BLOCK_TAG, self.send_blocks(path),)
+        else:                           # 比區塊小，直接傳內容
+            fileTag, fileSend = (FILE_COONTENT_TAG, self.send_content(path),)
+        
+        fileInfo = [
+            (FILE_BEGIN_TAG,    None),
+            (FILE_NAME_TAG,     lambda: self.send_name(fileName)),
+            (FILE_SIZE_TAG,     lambda: self.send_size(fileSize)),
+            (fileTag,           fileSend),
+            (FILE_END_TAG,      None),
+        ]
+        
+        for tag, sendAction in fileInfo:
+            backTag = None
+            # 這裡開始送標籤
+            try:
+                self.send_tag(tag)
+                self.recv_data()    # 接收 success tag?
+            except InOutException as e: # ??
+                backTag = e.args[0]
+            except Exception as e:
+                self.send_tag(FILE_ABORT_TAG)
+                break
+            error = None
+            if not sendAction: continue
+            # 這裡開始送資料
+            try:
+                sendAction()
+                self.recv_data()    # 接收 success tag?
+            except InOutException as e:
+                backTag = e.args[0]
+            except Exception as e:
+                error = FILE_ABORT_TAG
+                break
+            if error:
+                self.send_tag(error)
+                return False
+            if backTag != FILE_SUCCESS_TAG:
+                return False
+        return True
 
     def send_blocks(self, fileName):    # API
         fp        = open(fileName, 'rb')
@@ -166,6 +194,10 @@ class NetAPI:
             self.send_data(blockID)                 # 送出區塊編號
             self.send_data(block)                   # 送出檔案區塊
             totalSize += len(block)
+            backID = self.recv_data()               # 加一點等待時間，讓伺服器不會忙不過來
+            if backID != blockID:
+                self.send_fail()
+                break
         self.send_data(0)                           # 送出結束編號
         return totalSize
         
@@ -191,16 +223,17 @@ class NetAPI:
                 if len(block) + totalSize > self.maxSize:   # 收取資料總數太大
                     raise RuntimeError('Exceed max file size limit')
                 fp.write(block)                             # 寫進暫存檔
+                self.send_data(blockID)                     # 通知 Client 端
         return fileTmpName
 
     def recv_tag(self):               return self.iHandle.read()
     def recv_data(self):              return self.iHandle.read()
-    def send_tag(self, tag):          return self.oHandle.write(tag)
+    def send_tag(self, tag):          return self.oHandle.write(tag, True)
     def send_data(self, data):        return self.oHandle.write(data)
 
     def send_size(self, n):           return self.send_data(n)
     def send_name(self, s):           return self.send_data(s)
-    def send_conntent(self, d):       return self.send_data(d)
+    def send_content(self, d):       return self.send_data(d)
     
     def recv_size(self):           
         size = self.recv_data()
@@ -218,9 +251,9 @@ class NetAPI:
         return name
     def recv_content(self):           return self.recv_data()
     
-    def send_success(self):  pass
-    def send_fail(self):     pass
-    def send_abort(self, n): pass
+    def send_success(self):  self.send_tag(FILE_SUCCESS_TAG)
+    def send_fail(self):     self.send_tag(FILE_FAIL_TAG)
+    def send_abort(self):    self.send_tag(FILE_ABORT_TAG)
 
 def save_file(fileInfo, target):
     fileName = fileInfo.get(FILE_NAME_TAG)
