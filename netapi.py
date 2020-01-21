@@ -12,7 +12,7 @@ import time
 import shutil
 import socket
 #from config import *
-#from common import *
+from common import *
 from inout import InitIO, InOutException
 from path import split_path
 
@@ -57,7 +57,7 @@ class NetAPI:
         while True:
             # 開始先收標籤
             tag = None
-            #loggin.debug('wait for tag')
+            logging.debug('Wait for tag')
             try:
                 data = self.recv_data()  # 無用資料
                 #logging.warning('Catch unidentified data')
@@ -66,14 +66,14 @@ class NetAPI:
             except InOutException as e:
                 tag = e.args[0]         # 取得檔案標籤
             except socket.error as e:   # 網路的錯誤無法在這裡解決
-                #loggin.error(f'Exception: {str(e)}')
+                logging.error(f'Exception: {str(e)}')
                 raise
             except Exception as e:
-                #loggin.error(f'Exception: {str(e)}')
+                logging.error(f'Exception: {str(e)}')
                 print('Exception', str(e))
                 break
             
-            # logging.debug(f'Get tag: {tag}')
+            logging.debug(f'Get tag: {tag}')
             if not tag:        # 不是標籤，重新取得
                 continue
             elif tag == FILE_BEGIN_TAG: # 檔案傳送開始
@@ -83,27 +83,27 @@ class NetAPI:
                 self.send_success()
                 break
             elif tag == FILE_ABORT_TAG:
-                #logging.debug('abort')
+                logging.debug('abort')
                 result = {}
                 continue
-            #self.send_success()  <-- ??
+            self.send_success()  #<-- ??
             
             # 這裡收資料
             try:
-                #logging.debug('Wait for receive data')
+                logging.debug('Wait for receive data')
                 data = receiver.get(tag, (lambda:None))()     # 取得檔案資料
                 if data is None:    break   # 沒資料就停止
                 result[tag] = data      # 資料放進回傳值
-                #logging.debug('Send success after receive data')
+                logging.debug('Send success after receive data')
                 self.send_success()
                 continue
             except InOutException as e:
                 tag = e.args[0]         # 取得檔案標籤
                 break                   # 這裡不該取得標籤，無論是甚麼，都中斷
-            except socket.error as e:   # 網路的錯誤無法在這裡解決
+            except socket.error:   # 網路的錯誤無法在這裡解決
                 raise
             except Exception as e:
-                #loggin.error(f'Exception: {str(e)}')
+                loggin.error(f'Exception: {str(e)}')
                 print('Exception', str(e))
                 break
         if not result:  # 客戶端如果結束，中斷連線，result 會是空的
@@ -204,7 +204,8 @@ class NetAPI:
     def recv_blocks(self):            # API
         totalSize = 0
         lastBlockID = 0
-        fileTmpName = os.path.abspath(os.path.join(self.savePath, f'TEMP{int(time.time())}'))  #決定暫存檔名
+        # 決定暫存檔名
+        fileTmpName = os.path.abspath(os.path.join(self.savePath, f'TEMP{int(time.time())}'))
         dirname = os.path.dirname(fileTmpName)
         if not os.path.exists(dirname):
             os.makedirs(dirname)    # 產生目錄
@@ -258,22 +259,24 @@ class NetAPI:
 def save_file(fileInfo, target):
     fileName = fileInfo.get(FILE_NAME_TAG)
     fileSize = fileInfo.get(FILE_SIZE_TAG)
-    content = fileInfo.get(FILE_COONTENT_TAG)
+    content  = fileInfo.get(FILE_COONTENT_TAG)
     tempFile = fileInfo.get(FILE_BLOCK_TAG)
     
     if not fileName or not fileSize:
         return False
-    if content or tempFile:         # 有檔案內容或暫存檔
+    if content or tempFile:                         # 有檔案內容或暫存檔
         fullName = os.path.join(target, fileName)
         dirName = os.path.dirname(fullName)
-        if not os.path.exists(dirName): # 建立存檔目錄
-            os.mkdir(dirName)
-        if content:                     # 如果是 content 就存到檔名
+        if not os.path.exists(dirName):             # 建立存檔目錄
+            os.makedirs(dirName)
+        if content:                                 # 如果是 content 就存到檔名
+            logging.debug('Save content')
             if len(content) != fileSize:
                 raise RuntimeError('Size unmatched')
             with open(fullName, 'wb') as fp:
                 fp.write(content)
-        else:   # 如果是暫存檔，將暫存檔名改成真正檔名
+        else:                                       # 如果是暫存檔，將暫存檔名改成真正檔名
+            logging.debug(f'Save blocks from {tempFile} to {fullName}')
             if os.path.getsize(tempFile) != fileSize:
                 raise RuntimeError('Size unmatched')
             shutil.move(tempFile, fullName)

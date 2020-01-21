@@ -4,9 +4,11 @@ Created on Sat Jan 11 13:53:40 2020
 
 @author: 劉又聖
 """
-# my_protocol.py
-import struct, io, socket
-#from common import *
+# inout.py
+import io
+import socket
+import struct
+from common import *
 
 def InitIO(handle):
     # 可做更進階的討論
@@ -26,17 +28,22 @@ class INOUT:            #父類別
         self.exceptTag = b'\\'
     
     def data_to_nbyte(self, N, exceptFlag=False):     # 將資料加上基本標籤
+        # 差別在哪 ?
         exceptTag = self.exceptTag if exceptFlag else b''
+        exceptTag = {False: b'', True: self.exceptTag}.get(exceptFlag, b'')
+        
         if isinstance(N, int):
-            # N < 2^8(256) bytes
-            if N < (1 << 8):       tag = 'B'
-            # N < 2^16(65536) bytes
-            elif N < (1 << 16):    tag = 'H'
-            # N < 2^32(4G) bytes
-            elif N < (1 << 32):    tag = 'L'
-            # N < 2^64 bytes
-            else:                  tag = 'Q'
-            nbyte = tag.encode('utf-8') + struct.pack('!'+tag, N)
+            if N < (1 << 8):       tag = 'B'    # N < 2^8(256) bytes
+            elif N < (1 << 16):    tag = 'H'    # N < 2^16(65536) bytes
+            elif N < (1 << 32):    tag = 'L'    # N < 2^32(4G) bytes
+            elif N < (1 << 64):    tag = 'Q'    # N < 2^64 bytes
+            else:                  tag = 'U'
+            
+            if tag != 'U':
+                nbyte = tag.encode('utf-8') + struct.pack('!'+tag, N)
+            else:
+                b     = bignum_to_bytes(N)
+                nbyte = tag.encode('utf-8') + self.data_to_nbyte(len(b)) + b
         elif isinstance(N, bytes):
             tag, b = 's', N
             nbyte = tag.encode('utf-8') + self.data_to_nbyte(len(b)) + b
@@ -46,22 +53,26 @@ class INOUT:            #父類別
             nbyte = tag.encode('utf-8') + self.data_to_nbyte(len(b)) + b
         else:
             raise TypeError('Invaild Type: ' + type(tag))
+        
+        if exceptFlag:
+            logging.debug(f'Send exception: {nbyte}')
         return exceptTag + nbyte
-    
-    def nbyte_to_data(self):        # 將資料解開基本標籤
+    # 1/20 改道這
+    def nbyte_to_data(self):            # 將資料解開
         # Define the tags that mapping to size
         size_info = {'B':1, 'H':2, 'L':4, 'Q':8}
-        btag = self.read_raw(1)
+        
+        btag = self.read_raw(1)         # 不管是特殊標籤還是基本標籤都只有一個 bytes
         if not btag:
             return None
         exceptFlag = False
-        if btag == self.exceptTag:   # 如果是特殊標籤
-            exceptFlag = True        # 設 flag 為 True
-            btag = self.read_raw(1)  # 再讀一次為正常的基本標籤
-        if not btag:                 # 沒讀到東西就是斷線了
+        if btag == self.exceptTag:      # 如果是特殊標籤
+            exceptFlag = True           # 設 flag 為 True
+            btag = self.read_raw(1)     # 再讀一次為正常的基本標籤
+        if not btag:                    # 沒讀到東西就是斷線了
             return None
-        # Btag to String
-        tag = btag.decode('utf-8')
+        
+        tag = btag.decode('utf-8')      # Btag to String
         
         if tag in size_info:
             size    = size_info[tag]
