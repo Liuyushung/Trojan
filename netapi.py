@@ -20,13 +20,15 @@ FILE_BEGIN_TAG = b'FILEBEG0'
 FILE_END_TAG = b'FILEEND0'
 FILE_SIZE_TAG = b'FILESIZE'
 FILE_NAME_TAG = b'FILENAME'
-FILE_COONTENT_TAG = b'FILEDATA'
+FILE_CONTENT_TAG = b'FILEDATA'
 FILE_BLOCK_TAG = b'FILEBLKS'
 
 FILE_SUCCESS_TAG = b'FILEGOOD'
 FILE_FAIL_TAG = b'FILEFAIL'
 FILE_ABORT_TAG = B'FILEABRT'
 FILE_TAG_SIZE = len(FILE_BEGIN_TAG)
+
+where = 'NetAPI'
 
 # netapi.py
 class NetAPI:
@@ -41,117 +43,49 @@ class NetAPI:
             oHandle = iHandle
         self.iHandle = InitIO(iHandle)
         self.oHandle = InitIO(oHandle)
-        self.savePath = 'D:\\PyTrojan\\SavedFiles'      # 存檔目錄
+        self.savePath = 'D:\\PyTrojan\\SavedFiles\\Temp'      # 存檔目錄
         self.maxSize = 2147483647                       # 最大檔案限制
         self.blockSize = 1024                           # 區塊大小
-        
-    def recv_file(self):    # API
-        receiver = {
-            FILE_NAME_TAG     :  self.recv_name,
-            FILE_SIZE_TAG     :  self.recv_size,
-            FILE_COONTENT_TAG :  self.recv_content,
-            FILE_BLOCK_TAG    :  self.recv_blocks,
-        }
-        result = {}
-        
-        while True:
-            # 開始先收標籤
-            tag = None
-            logging.debug('Wait for tag')
-            try:
-                data = self.recv_data()  # 無用資料
-                #logging.warning('Catch unidentified data')
-                if not data:    break    # 沒資料了，結束
-                continue
-            except InOutException as e:
-                tag = e.args[0]         # 取得檔案標籤
-            except socket.error as e:   # 網路的錯誤無法在這裡解決
-                logging.error(f'Exception: {str(e)}')
-                raise
-            except Exception as e:
-                logging.error(f'Exception: {str(e)}')
-                print('Exception', str(e))
-                break
-            
-            logging.debug(f'Get tag: {tag}')
-            if not tag:        # 不是標籤，重新取得
-                continue
-            elif tag == FILE_BEGIN_TAG: # 檔案傳送開始
-                result= {}      # 檔案初始化
-                self.send_success()
-            elif tag == FILE_END_TAG:   # 檔案傳送結束
-                self.send_success()
-                break
-            elif tag == FILE_ABORT_TAG:
-                logging.debug('abort')
-                result = {}
-                continue
-            self.send_success()  #<-- ??
-            
-            # 這裡收資料
-            try:
-                logging.debug('Wait for receive data')
-                data = receiver.get(tag, (lambda:None))()     # 取得檔案資料
-                if data is None:    break   # 沒資料就停止
-                result[tag] = data      # 資料放進回傳值
-                logging.debug('Send success after receive data')
-                self.send_success()
-                continue
-            except InOutException as e:
-                tag = e.args[0]         # 取得檔案標籤
-                break                   # 這裡不該取得標籤，無論是甚麼，都中斷
-            except socket.error:   # 網路的錯誤無法在這裡解決
-                raise
-            except Exception as e:
-                loggin.error(f'Exception: {str(e)}')
-                print('Exception', str(e))
-                break
-        if not result:  # 客戶端如果結束，中斷連線，result 會是空的
-            result = None
-        else:
-            if FILE_NAME_TAG not in result:     # 缺了檔名
-                print('Name not found', result)
-                reuslt = None
-            elif FILE_SIZE_TAG not in result:   # 缺了檔案大小
-                print('Size not found', result)
-                reuslt = None
-            elif FILE_COONTENT_TAG not in result \
-                and FILE_BLOCK_TAG not in reuslt:   # 缺了檔案內容
-                print('Content not found', result)
-                reuslt = None
-            response = FILE_SUCCESS_TAG if result else FILE_FAIL_TAG
-            self.send_tag(response)     # 沒缺資料就傳送成功，否則傳送失敗
-
-        # 設 flag 檢查收取的資料
-        essential_flag = {
-            FILE_NAME_TAG       : 1,
-            FILE_SIZE_TAG       : 2,
-            FILE_COONTENT_TAG   : 4,
-            FILE_BLOCK_TAG      : 4,
-        }
-        flag = sum([ essential_flag.get(x) for x in result.keys() ])
-        if flag != 7:   # 有缺少資料
-            result = None
-        return result
     
+    """ Send Part """
+    def send_success(self):           return self.send_tag(FILE_SUCCESS_TAG)
+    def send_fail(self):              return self.send_tag(FILE_FAIL_TAG)
+    def send_abort(self):             return self.send_tag(FILE_ABORT_TAG)
+
+    def send_tag(self, tag):          return self.oHandle.write(tag, True)
+    def send_data(self, data):        return self.oHandle.write(data)
+
+    def send_size(self, n):
+           return self.send_data(n)
+       
+    def send_name(self, path):
+           fileName = '\t'.join(split_path(path))
+           return self.send_data(fileName)
+
     def send_file(self, path):    # API
-        fileName = '\t'.join(split_path(path))
+        fileName = os.path.abspath(path)
         fileSize = os.path.getsize(path)
-        fileData = open(path, 'rb').read()
         
+        try:
+            logging.debug(f'{where}  Test for opening {fileName}')
+            open(fileName, 'rb')
+        except Exception as e:
+            logging.error(f'{where}  Exception while testing opening: {fileName} {str(e)}')
+            return None
         # 先決定檔案內容用甚麼方式傳送
         if fileSize > self.blockSize:   # 比區塊大，用區塊傳
-            fileTag, fileSend = (FILE_BLOCK_TAG, self.send_blocks(path),)
+            fileTag, fileSend = (FILE_BLOCK_TAG,    lambda: self.send_blocks(path),  )
         else:                           # 比區塊小，直接傳內容
-            fileTag, fileSend = (FILE_COONTENT_TAG, self.send_content(path),)
+            fileTag, fileSend = (FILE_CONTENT_TAG, lambda: self.send_content(path), )
         
         fileInfo = [
             (FILE_BEGIN_TAG,    None),
-            (FILE_NAME_TAG,     lambda: self.send_name(fileName)),
-            (FILE_SIZE_TAG,     lambda: self.send_size(fileSize)),
-            (fileTag,           fileSend),
+            (FILE_NAME_TAG,     lambda: self.send_name(fileName), ),
+            (FILE_SIZE_TAG,     lambda: self.send_size(fileSize), ),
+            (fileTag,           fileSend, ),
             (FILE_END_TAG,      None),
         ]
+        #logging.debug(f'{where}  fileInfo tags are ' + str( (lambda: [ x[0] for x in fileInfo])() ) )
         
         for tag, sendAction in fileInfo:
             backTag = None
@@ -160,8 +94,10 @@ class NetAPI:
                 self.send_tag(tag)
                 self.recv_data()    # 接收 success tag?
             except InOutException as e: # ??
+                logging.info(f'{where}  After send tag {tag}, Get tag {e.args[0]}')
                 backTag = e.args[0]
             except Exception as e:
+                logging.error(f'{where}  After send tag {tag}, Exception: {str(e)}')
                 self.send_tag(FILE_ABORT_TAG)
                 break
             error = None
@@ -171,8 +107,10 @@ class NetAPI:
                 sendAction()
                 self.recv_data()    # 接收 success tag?
             except InOutException as e:
+                logging.info(f'{where}  After send data of " {tag} ", Exception: {str(e)}')
                 backTag = e.args[0]
             except Exception as e:
+                logging.error(f'{where}  After send data of " {tag} ", Exception: {str(e)}')
                 error = FILE_ABORT_TAG
                 break
             if error:
@@ -182,11 +120,22 @@ class NetAPI:
                 return False
         return True
 
-    def send_blocks(self, fileName):    # API
+    def send_content(self, fileName):
+        logging.debug(f'{where}  Send content {fileName}')
+        try:
+            fileData = open(fileName, 'rb').read()
+            self.send_data(fileData)
+        except Exception as e:
+            logging.error(f'{where}  Send content Exception: str(e)')
+            raise
+        return len(fileData)
+
+    def send_blocks(self, fileName):
         fp        = open(fileName, 'rb')
         blockID   = 0
         totalSize = 0
         
+        logging.debug(f'{where}  Send Blocks {fileName}')
         while True:
             block      = fp.read(self.blockSize)    # 讀檔案
             if not block:   break                   # 沒資料就是結束
@@ -200,8 +149,140 @@ class NetAPI:
                 break
         self.send_data(0)                           # 送出結束編號
         return totalSize
+
+    """ Receive Part """
+    def recv_tag(self):               return self.iHandle.read()
+    def recv_data(self):              return self.iHandle.read()
+
+    def recv_size(self):           
+        size = self.recv_data()
+        if not isinstance(size, int): # 判斷是否為 int
+            raise TypeError('Invalid size type {}'.format(type(size)))
+        logging.debug(f'{where}  File size: {size}')
+        return size
+    
+    def recv_name(self):
+        path = self.recv_data()
+        if not isinstance(path, str): # 判斷是否為 str
+            raise TypeError('Invalid name type {}'.format(type(path)))
+        namelist = path.split('\t')
+        if '..' in namelist:
+            raise ValueError('Dangerous path')
+        name = os.path.join(*namelist)
+        logging.debug(f'{where}  File name: {name}')
+        return name
+    
+    def recv_content(self):
+        logging.debug('{where}  Receive content')
+        data = self.recv_data()
+        if not isinstance(data, bytes):
+            raise TypeError(f'Invalid content type {type(data)}')
+        return data
+    
+    def recv_file(self):    # API
+        receiver = {
+            FILE_NAME_TAG     :  self.recv_name,
+            FILE_SIZE_TAG     :  self.recv_size,
+            FILE_CONTENT_TAG  :  self.recv_content,
+            FILE_BLOCK_TAG    :  self.recv_blocks,
+        }
+        result = {}
         
-    def recv_blocks(self):            # API
+        while True:
+            # 開始先收標籤
+            tag = None
+            logging.debug(f'{where}  Wait for tag')
+            try:
+                data = self.recv_data()  # 無用資料
+                if data is None:
+                    result = None
+                    break    # 沒資料了，結束
+                logging.warning(f'{where}  Catch unidentified data\n\t{data}')
+                continue
+            except InOutException as e:
+                tag = e.args[0]         # 取得檔案標籤
+                logging.debug(f'{where}  InOutException: Get tag {tag}')
+            except socket.error as e:   # 網路的錯誤無法在這裡解決
+                logging.error(f'{where}  Exception: {str(e)}')
+                raise
+            except Exception as e:
+                logging.error(f'{where}  Exception: {str(e)}')
+                print('Exception', str(e))
+                break
+            
+            logging.debug(f'{where}  Get tag: {tag}')
+            if not tag:        # 不是標籤，重新取得
+                continue
+            elif tag == FILE_BEGIN_TAG: # 檔案傳送開始
+                result= {}      # 檔案初始化
+                self.send_success()
+                continue
+            elif tag == FILE_END_TAG:   # 檔案傳送結束
+                self.send_success()
+                break
+            elif tag == FILE_ABORT_TAG:
+                logging.debug('abort')
+                result = {}
+                continue
+            
+            self.send_success()  #<-- ??
+            # 這裡收資料
+            try:
+                logging.debug(f'{where}  Wait for receive data')
+                data = receiver.get(tag, (lambda:None))()     # 取得檔案資料
+                if data is None:    break   # 沒資料就停止
+                result[tag] = data      # 資料放進回傳值
+                logging.debug(f'{where}  Send success after receive data')
+                self.send_success()
+                continue
+            except InOutException as e:
+                tag = e.args[0]         # 取得檔案標籤
+                break                   # 這裡不該取得標籤，無論是甚麼，都中斷
+            except socket.error:   # 網路的錯誤無法在這裡解決
+                raise
+            except Exception as e:
+                logging.error(f'{where}  Exception: {str(e)}')
+                print('Exception', str(e))
+                break
+            if tag: break
+            logging.debug(f'{where}  Send fail after data')
+            self.send_fail()
+        if not result:  # 客戶端如果結束，中斷連線，result 會是空的
+            result = None
+        
+        return self.recv_verify(result)
+        
+    def recv_verify(self, result):
+        """
+            if FILE_NAME_TAG not in result:     # 缺了檔名
+                print('Name not found', result)
+                reuslt = None
+            elif FILE_SIZE_TAG not in result:   # 缺了檔案大小
+                print('Size not found', result)
+                reuslt = None
+            elif FILE_CONTENT_TAG not in result \
+                and FILE_BLOCK_TAG not in reuslt:   # 缺了檔案內容
+                print('Content not found', result)
+                reuslt = None
+            response = FILE_SUCCESS_TAG if result else FILE_FAIL_TAG
+            self.send_tag(response)     # 沒缺資料就傳送成功，否則傳送失敗
+        """
+        if result:
+            # 設 flag 檢查收取的資料
+            essential_flag = {
+                FILE_NAME_TAG       : 1,
+                FILE_SIZE_TAG       : 2,
+                FILE_CONTENT_TAG    : 4,
+                FILE_BLOCK_TAG      : 4,
+            }
+            flag = sum([ essential_flag.get(x) for x in result.keys() ])
+            if flag != 7:   # 有缺少資料
+                logging.info(f'{where}  Recv verify failed, {flag}')
+                result = None
+        return result    
+        
+    def recv_blocks(self):
+        logging.debug('{where}  Receive blocka')
         totalSize = 0
         lastBlockID = 0
         # 決定暫存檔名
@@ -226,40 +307,20 @@ class NetAPI:
                 fp.write(block)                             # 寫進暫存檔
                 self.send_data(blockID)                     # 通知 Client 端
         return fileTmpName
-
-    def recv_tag(self):               return self.iHandle.read()
-    def recv_data(self):              return self.iHandle.read()
-    def send_tag(self, tag):          return self.oHandle.write(tag, True)
-    def send_data(self, data):        return self.oHandle.write(data)
-
-    def send_size(self, n):           return self.send_data(n)
-    def send_name(self, s):           return self.send_data(s)
-    def send_content(self, d):       return self.send_data(d)
     
-    def recv_size(self):           
-        size = self.recv_data()
-        if not isinstance(size, int): # 判斷是否為 int
-            raise TypeError('Invalid size type {}'.format(type(size)))
-        return size
-    def recv_name(self):
-        path = self.recv_data()
-        if not isinstance(path, str): # 判斷是否為 str
-            raise TypeError('Invalid name type {}'.format(type(path)))
-        namelist = path.split('\t')
-        if '..' in namelist:
-            raise ValueError('Dangerous path')
-        name = os.path.join(*namelist)
-        return name
-    def recv_content(self):           return self.recv_data()
-    
-    def send_success(self):  self.send_tag(FILE_SUCCESS_TAG)
-    def send_fail(self):     self.send_tag(FILE_FAIL_TAG)
-    def send_abort(self):    self.send_tag(FILE_ABORT_TAG)
+    def close(self):
+        try:
+            self.iHandle.close()
+            self.oHandle.close()
+        except Exception as e:
+            logging.error(f'{where}  Close Failed: {str(e)}')
+            return False
+        return True
 
 def save_file(fileInfo, target):
     fileName = fileInfo.get(FILE_NAME_TAG)
     fileSize = fileInfo.get(FILE_SIZE_TAG)
-    content  = fileInfo.get(FILE_COONTENT_TAG)
+    content  = fileInfo.get(FILE_CONTENT_TAG)
     tempFile = fileInfo.get(FILE_BLOCK_TAG)
     
     if not fileName or not fileSize:
@@ -270,13 +331,13 @@ def save_file(fileInfo, target):
         if not os.path.exists(dirName):             # 建立存檔目錄
             os.makedirs(dirName)
         if content:                                 # 如果是 content 就存到檔名
-            logging.debug('Save content')
+            logging.debug(f'{where}  Save content to {fullName}')
             if len(content) != fileSize:
                 raise RuntimeError('Size unmatched')
             with open(fullName, 'wb') as fp:
                 fp.write(content)
         else:                                       # 如果是暫存檔，將暫存檔名改成真正檔名
-            logging.debug(f'Save blocks from {tempFile} to {fullName}')
+            logging.debug(f'{where}  Save blocks from {tempFile} to {fullName}')
             if os.path.getsize(tempFile) != fileSize:
                 raise RuntimeError('Size unmatched')
             shutil.move(tempFile, fullName)

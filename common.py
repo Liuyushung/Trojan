@@ -8,7 +8,11 @@ Created on Mon Jan 20 15:24:05 2020
 import sys
 import logging
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(
+        level=logging.DEBUG,
+        #level=logging.INFO,
+        format='[%(levelname)s]  %(message)s',
+        )
 
 class Output:
     def __init__(self, mode=True):

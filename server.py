@@ -23,7 +23,8 @@ while True:
         if not data:    break
         print('receive from', addr)
         print(data)
-        save_file(data, os.path.join('..\\SaveFiles', addr[0]))
-conn.close()
+        if save_file(data, os.path.join('D:\\PyTrojan\\SavedFiles', addr[0])):
+            print('Save sucessed')
+    handler.close()
 
 serverSocket.close()

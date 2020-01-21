@@ -10,6 +10,8 @@ import socket
 import struct
 from common import *
 
+where = 'InOut'
+
 def InitIO(handle):
     # 可做更進階的討論
     readers = {
@@ -54,13 +56,17 @@ class INOUT:            #父類別
         else:
             raise TypeError('Invaild Type: ' + type(tag))
         
-        if exceptFlag:
-            logging.debug(f'Send exception: {nbyte}')
+        #if exceptFlag:    logging.debug(f'{where}  Send exception: {nbyte}')
+        
         return exceptTag + nbyte
-    # 1/20 改道這
+
     def nbyte_to_data(self):            # 將資料解開
         # Define the tags that mapping to size
-        size_info = {'B':1, 'H':2, 'L':4, 'Q':8}
+        size_info = {'B': 1, 'H': 2, 'L': 4, 'Q': 8}    # 單位是 bbytes
+        valendata = {'s': lambda n : n,
+                     'c': lambda n : n.decode('utf-8'),
+                     'U': lambda n : bytes_to_bignum(n),
+                    }
         
         btag = self.read_raw(1)         # 不管是特殊標籤還是基本標籤都只有一個 bytes
         if not btag:
@@ -75,28 +81,31 @@ class INOUT:            #父類別
         tag = btag.decode('utf-8')      # Btag to String
         
         if tag in size_info:
-            size    = size_info[tag]
-            bnum    = self.read_raw(size)
-            result  = struct.unpack('!'+tag, bnum)[0]
-        elif tag in ['s', 'c']:
-            size    = self.nbyte_to_data()
-            if size >= 65536:    raise ValueError('length too long: ' + str(size))
-            bstr    = b''
+            size         = size_info[tag]
+            bnum         = b''
+            while len(bnum) < size:
+                bnum    += self.read_raw(size - len(bnum))
+            result       = struct.unpack('!'+tag, bnum)[0]
+        elif tag in valendata:
+            size         = self.nbyte_to_data()
+            #if size >= 65536:    raise ValueError('length too long: ' + str(size))
+            bstr         = b''
             while len(bstr) < size:     #網路可能出問題，導致收到的比預期少
-                bstr += self.read_raw(size - len(bstr))
-            result  = bstr if tag == 's' else bstr.decode('utf-8')
+                bstr    += self.read_raw(size - len(bstr))
+            result       = valendata[tag](bstr)
         else:
             raise TypeError('Invaild type: ' + tag)
         if exceptFlag:
             # 是特別標籤時不用 return ， 而是用　raise exception
             # 有無特別標籤的差別僅是在於傳回資料的方法而已
+            #logging.debug(f'{where}  Receive exception {result}')
             raise InOutException(result)
         return result
     
     def read(self): # 提供高級的存取介面
         return self.nbyte_to_data()
-    def write(self, d): # 提供高級的存取介面
-        byte_data = self.data_to_nbyte(d)
+    def write(self, d, exceptFlag=False): # 提供高級的存取介面
+        byte_data = self.data_to_nbyte(d, exceptFlag)
         self.write_raw(byte_data)
     def read_raw(self, n):
         return self.read_handle(n)
